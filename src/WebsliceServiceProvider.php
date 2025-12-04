@@ -52,13 +52,36 @@ class WebsliceServiceProvider extends ServiceProvider
         Config::set('cache.stores.glide.driver', 'file');
         Config::set('session.driver', 'cookie');
 
-        $configMap = [
-            'cache.stores.file.path' => self::TEMP_PATH . '/framework/cache/data',
-            'view.compiled'          => self::TEMP_PATH . '/framework/views',
+        // Temp paths - ephemeral storage that doesn't need to persist
+        $tempConfigMap = [
+            'cache.stores.file.path'  => self::TEMP_PATH . '/framework/cache/data',
+            'view.compiled'           => self::TEMP_PATH . '/framework/views',
             'cache.stores.glide.path' => self::TEMP_PATH . '/framework/cache/glide',
         ];
 
-        foreach ($configMap as $configKey => $path) {
+        // Shared file paths - persistent storage that survives deployments (create parent dir)
+        $sharedFileConfigMap = [
+            'logging.channels.single.path'    => self::SHARED_PATH . '/logs/laravel.log',
+            'logging.channels.daily.path'     => self::SHARED_PATH . '/logs/laravel.log',
+            'logging.channels.emergency.path' => self::SHARED_PATH . '/logs/laravel.log',
+        ];
+
+        // Shared directory paths - persistent storage that survives deployments (create dir itself)
+        $sharedDirConfigMap = [
+            'statamic.forms.submissions' => self::SHARED_PATH . '/form-submissions',
+        ];
+
+        foreach ($tempConfigMap as $configKey => $path) {
+            $this->ensureDirectoryExists($path);
+            Config::set($configKey, $path);
+        }
+
+        foreach ($sharedFileConfigMap as $configKey => $path) {
+            $this->ensureDirectoryExists(dirname($path));
+            Config::set($configKey, $path);
+        }
+
+        foreach ($sharedDirConfigMap as $configKey => $path) {
             $this->ensureDirectoryExists($path);
             Config::set($configKey, $path);
         }
