@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Symfony\Component\Lock\LockFactory;
 use Symfony\Component\Lock\Store\FlockStore;
+use Webslice\StatamicProvider\Console\StacheBundleCommand;
 
 /**
  * Webslice service provider for Statamic CMS.
@@ -44,11 +45,69 @@ class WebsliceServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        if ($this->app->runningInConsole()) {
+            $this->commands([StacheBundleCommand::class]);
+        }
+
         if (! env('WEBSLICE') || env('DISABLE_WEBSLICE_PROVIDER')) {
             return;
         }
 
+        $this->seedStacheFromBundle();
         $this->relocateStacheLocks();
+    }
+
+    /**
+     * Seed the per-instance stache cache from the release-built bundle.
+     *
+     * The stache lives in per-instance /tmp, so a fresh instance would
+     * otherwise rebuild it lazily by parsing the whole content tree over the
+     * network filesystem (10s+ for listing pages, repeated per instance).
+     * The release script bundles a warmed stache into the deploy directory
+     * (see webslice:stache-bundle); extracting it here turns that rebuild
+     * into a single sequential read of one archive.
+     *
+     * Concurrent workers race safely: each extracts into a private staging
+     * directory and renames it into place, which is atomic and fails for
+     * everyone but the first - losers just discard their staging copy.
+     * Any failure falls back to Statamic's lazy rebuild.
+     */
+    private function seedStacheFromBundle(): void
+    {
+        $target = Config::get('cache.stores.file.path') . '/stache';
+
+        if (is_dir($target)) {
+            return; // already seeded (or lazily built) on this instance
+        }
+
+        $bundle = storage_path('statamic/stache-bundle.tar.gz');
+
+        if (! is_file($bundle)) {
+            return; // release did not produce a bundle; lazy rebuild applies
+        }
+
+        $staging = $target . '.staging-' . getmypid();
+
+        try {
+            $this->ensureDirectoryExists($staging);
+
+            exec(sprintf('tar -xzf %s -C %s 2>&1', escapeshellarg($bundle), escapeshellarg($staging)), $output, $exitCode);
+
+            if ($exitCode !== 0) {
+                Log::warning('WebsliceProvider: stache bundle extraction failed: ' . implode("\n", $output));
+                return;
+            }
+
+            if (! @rename($staging, $target)) {
+                return; // another worker won the race; its copy is equivalent
+            }
+
+            Log::info("WebsliceProvider: seeded stache cache from [{$bundle}]");
+        } finally {
+            if (is_dir($staging)) {
+                exec(sprintf('rm -rf %s', escapeshellarg($staging)));
+            }
+        }
     }
 
     /**
