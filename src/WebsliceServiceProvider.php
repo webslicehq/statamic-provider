@@ -67,46 +67,73 @@ class WebsliceServiceProvider extends ServiceProvider
      * (see webslice:stache-bundle); extracting it here turns that rebuild
      * into a single sequential read of one archive.
      *
-     * Concurrent workers race safely: each extracts into a private staging
-     * directory and renames it into place, which is atomic and fails for
-     * everyone but the first - losers just discard their staging copy.
-     * Any failure falls back to Statamic's lazy rebuild.
+     * The cache directory may already exist with a partial, lazily-built
+     * cache: requests (e.g. platform warmers) can arrive before the release
+     * has produced the bundle. Seeding therefore keys off a marker file
+     * rather than the directory's existence, and extracts over the top of
+     * whatever was built lazily - the bundle is a superset of it. A
+     * non-blocking local flock keeps concurrent workers from extracting
+     * twice. Any failure falls back to Statamic's lazy rebuild and is
+     * retried on the next request.
      */
     private function seedStacheFromBundle(): void
     {
-        $target = Config::get('cache.stores.file.path') . '/stache';
-
-        if (is_dir($target)) {
-            return; // already seeded (or lazily built) on this instance
-        }
-
         $bundle = storage_path('statamic/stache-bundle.tar.gz');
 
         if (! is_file($bundle)) {
-            return; // release did not produce a bundle; lazy rebuild applies
+            return; // release did not produce a bundle (yet); lazy rebuild applies
         }
 
-        $staging = $target . '.staging-' . getmypid();
+        $target = Config::get('cache.stores.file.path') . '/stache';
+        $marker = $target . '/.seeded-from-bundle';
+
+        if (is_file($marker)) {
+            return; // already seeded on this instance
+        }
+
+        $this->ensureDirectoryExists($target);
+
+        $lockHandle = fopen($target . '/.seed-lock', 'c');
+
+        if ($lockHandle === false || ! flock($lockHandle, LOCK_EX | LOCK_NB)) {
+            if ($lockHandle !== false) {
+                fclose($lockHandle);
+            }
+
+            return; // another worker is seeding right now
+        }
+
+        $localBundle = self::TEMP_PATH . '/stache-bundle-' . getmypid() . '.tar.gz';
 
         try {
-            $this->ensureDirectoryExists($staging);
+            if (is_file($marker)) {
+                return; // seeded while we acquired the lock
+            }
 
-            exec(sprintf('tar -xzf %s -C %s 2>&1', escapeshellarg($bundle), escapeshellarg($staging)), $output, $exitCode);
+            // Copy the bundle off the network filesystem before extracting:
+            // untarring straight from it has tar's gzip child dying with
+            // SIGABRT under the fs interceptor, and a single sequential copy
+            // is the access pattern the interceptor serves best anyway.
+            if (! copy($bundle, $localBundle)) {
+                Log::warning("WebsliceProvider: could not copy stache bundle [{$bundle}] to local storage");
 
-            if ($exitCode !== 0) {
-                Log::warning('WebsliceProvider: stache bundle extraction failed: ' . implode("\n", $output));
                 return;
             }
 
-            if (! @rename($staging, $target)) {
-                return; // another worker won the race; its copy is equivalent
+            exec(sprintf('tar -xzf %s -C %s 2>&1', escapeshellarg($localBundle), escapeshellarg($target)), $output, $exitCode);
+
+            if ($exitCode !== 0) {
+                Log::warning('WebsliceProvider: stache bundle extraction failed: ' . implode("\n", $output));
+
+                return;
             }
 
+            touch($marker);
             Log::info("WebsliceProvider: seeded stache cache from [{$bundle}]");
         } finally {
-            if (is_dir($staging)) {
-                exec(sprintf('rm -rf %s', escapeshellarg($staging)));
-            }
+            @unlink($localBundle);
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
         }
     }
 
