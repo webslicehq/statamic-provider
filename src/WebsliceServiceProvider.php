@@ -86,7 +86,42 @@ class WebsliceServiceProvider extends ServiceProvider
             Config::set($configKey, $path);
         }
 
+        $this->configureStacheStore();
         $this->setupGlideCache();
+    }
+
+    /**
+     * Keep the Statamic stache in deploy-local shared storage.
+     *
+     * The default file cache store lives in per-instance /tmp (see above), which
+     * forces every fresh instance to rebuild the stache from the content tree on
+     * its first requests. The stache is warmed once per release by
+     * `php please stache:refresh` and is read-only afterwards (the file watcher
+     * is disabled in production), so a dedicated store on the deploy directory
+     * lets every instance read the cache built at release time instead.
+     *
+     * The store sits under the deploy directory rather than SHARED_PATH so the
+     * stache is versioned with the content it indexes - a new deploy serves the
+     * stache its own release step built, never a previous release's.
+     */
+    private function configureStacheStore(): void
+    {
+        $path = storage_path('framework/cache/stache');
+        $this->ensureDirectoryExists($path);
+
+        Config::set('cache.stores.stache', [
+            'driver' => 'file',
+            'path'   => $path,
+        ]);
+        Config::set('statamic.stache.cache_store', 'stache');
+
+        // The StacheLock middleware takes a brief exclusive flock on shared
+        // storage for every request as a "warming in progress" gate. With the
+        // stache warmed at release time before traffic reaches the deploy, the
+        // gate guards nothing and only adds network lock contention - disable it.
+        // The warming lock itself stays at Statamic's default (also on the deploy
+        // directory), which correctly serializes the release-time warm.
+        Config::set('statamic.stache.lock.enabled', false);
     }
 
     /**
