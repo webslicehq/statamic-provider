@@ -6,6 +6,8 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Symfony\Component\Lock\LockFactory;
+use Symfony\Component\Lock\Store\FlockStore;
 
 /**
  * Webslice service provider for Statamic CMS.
@@ -40,7 +42,42 @@ class WebsliceServiceProvider extends ServiceProvider
     /**
      * Bootstrap services.
      */
-    public function boot(): void {}
+    public function boot(): void
+    {
+        if (! env('WEBSLICE') || env('DISABLE_WEBSLICE_PROVIDER')) {
+            return;
+        }
+
+        $this->relocateStacheLocks();
+    }
+
+    /**
+     * Move the Statamic Stache lock directory to instance-local storage.
+     *
+     * The stache cache lives in per-instance /tmp (see configureEnvironment),
+     * so the stache-warming lock guarding it must be per-instance too.
+     * Statamic hardcodes its lock directory to storage_path('statamic/stache-locks'),
+     * which sits on the shared network filesystem - every request then takes a
+     * brief exclusive network flock as a gate check (StacheLock middleware),
+     * and instances stall each other even though each instance only ever warms
+     * its own private cache.
+     *
+     * This must run in boot() rather than register() because it resolves the
+     * Stache singleton, which Statamic's own service provider registers.
+     */
+    private function relocateStacheLocks(): void
+    {
+        if (! class_exists(\Statamic\Stache\Stache::class)) {
+            Log::debug('WebsliceProvider: Statamic is not installed, skipping stache lock relocation');
+            return;
+        }
+
+        $dir = self::TEMP_PATH . '/statamic/stache-locks';
+        $this->ensureDirectoryExists($dir);
+
+        $this->app->make(\Statamic\Stache\Stache::class)
+            ->setLockFactory(new LockFactory(new FlockStore($dir)));
+    }
 
     /**
      * Configure Statamic environment for serverless deployment.
