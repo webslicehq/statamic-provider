@@ -45,7 +45,10 @@ These paths use shared storage that persists between deployments:
 | `logging.channels.daily.path`                   | `/mnt/data/website/shared/logs/laravel.log`   |
 | `logging.channels.emergency.path`               | `/mnt/data/website/shared/logs/laravel.log`   |
 | `statamic.forms.submissions`                    | `/mnt/data/website/shared/form-submissions`   |
+| `statamic.stache.stores.form-submissions.directory` | `/mnt/data/website/shared/form-submissions` |
 | `statamic.assets.image_manipulation.cache_path` | `/mnt/data/website/shared/public/glide-cache` |
+
+Statamic 4 reads the form submissions path from `statamic.forms.submissions`, while Statamic 5 and 6 resolve it from the `form-submissions` Stache store. Both keys are set to the same path so submissions land in shared storage on every supported version.
 
 ## Glide Image Cache
 
@@ -65,8 +68,8 @@ If you need to manually register the service provider, add it to the `providers`
 ## Requirements
 
 - PHP 8.1 or higher
-- Laravel 10.x or 11.x
-- Statamic CMS 4.x or 5.x
+- Laravel 10.x, 11.x, 12.x or 13.x
+- Statamic CMS 4.x, 5.x or 6.x
 
 ## License
 

@@ -67,8 +67,11 @@ class WebsliceServiceProvider extends ServiceProvider
         ];
 
         // Shared directory paths - persistent storage that survives deployments (create dir itself)
+        // Statamic 4 reads the submissions path from statamic.forms.submissions. Statamic 5 and 6
+        // resolve it from the form-submissions Stache store instead, so set both to the same path.
         $sharedDirConfigMap = [
-            'statamic.forms.submissions' => self::SHARED_PATH . '/form-submissions',
+            'statamic.forms.submissions'                        => self::SHARED_PATH . '/form-submissions',
+            'statamic.stache.stores.form-submissions.directory' => self::SHARED_PATH . '/form-submissions',
         ];
 
         foreach ($tempConfigMap as $configKey => $path) {
