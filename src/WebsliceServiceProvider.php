@@ -19,6 +19,10 @@ class WebsliceServiceProvider extends ServiceProvider
     private const TEMP_PATH = '/tmp/storage';
     private const SHARED_PATH = '/mnt/data/website/shared';
 
+    private const LINK_OK = 'ok';
+    private const LINK_OCCUPIED = 'occupied';
+    private const LINK_FAILED = 'failed';
+
     /**
      * Register services.
      */
@@ -90,6 +94,7 @@ class WebsliceServiceProvider extends ServiceProvider
         }
 
         $this->setupGlideCache();
+        $this->setupAssetDisk();
     }
 
     /**
@@ -125,22 +130,65 @@ class WebsliceServiceProvider extends ServiceProvider
 
         Config::set('statamic.assets.image_manipulation.cache_path', $target);
         $this->ensureDirectoryExists(dirname($target));
-        $this->ensureDirectoryExists(dirname($link));
 
-        if (is_link($link) && readlink($link) === $target) {
-            return;
-        }
-
-        // If something already exists at $link and it isn't the symlink we want, we don't want to overwrite it.
-        if (file_exists($link)) {
+        if ($this->linkToShared($link, $target) === self::LINK_OCCUPIED) {
             Log::error("WebsliceProvider: Link [$link] already exists, not creating symlink");
+        }
+    }
+
+    /**
+     * Link the asset container to shared storage so Control Panel uploads, and
+     * the .meta sidecars holding their alt text, survive a versioned deploy.
+     */
+    private function setupAssetDisk(): void
+    {
+        $root = Config::get('filesystems.disks.assets.root');
+
+        if (empty($root)) {
+            Log::debug('WebsliceProvider: No assets disk configured, skipping setup');
             return;
         }
+
+        // Any other root is already outside the deploy directory, or served
+        // through PHP, so a symlink would not help it.
+        if (! str_starts_with($root, public_path() . DIRECTORY_SEPARATOR)) {
+            Log::debug("WebsliceProvider: Assets disk root [$root] is not in the public directory, skipping setup");
+            return;
+        }
+
+        $target = self::SHARED_PATH . '/public/' . basename($root);
+        $this->ensureDirectoryExists($target);
+
+        if ($this->linkToShared($root, $target) === self::LINK_OCCUPIED) {
+            Log::debug("WebsliceProvider: Assets disk root [$root] already exists, leaving it alone");
+        }
+    }
+
+    /**
+     * Symlink a path to shared storage, never replacing what is already there.
+     * Callers decide how loudly to report LINK_OCCUPIED.
+     */
+    private function linkToShared(string $link, string $target): string
+    {
+        if (is_link($link)) {
+            return readlink($link) === $target ? self::LINK_OK : self::LINK_OCCUPIED;
+        }
+
+        // Whatever is here was deployed, so replacing it could remove files.
+        if (file_exists($link)) {
+            return self::LINK_OCCUPIED;
+        }
+
+        $this->ensureDirectoryExists(dirname($link));
 
         if (! @symlink($target, $link)) {
             Log::error("WebsliceProvider: Could not create symlink from [$link] to [$target]: " . (error_get_last()['message'] ?? 'Unknown error'));
-        } else {
-            Log::info("WebsliceProvider: Created symlink from [$link] to [$target]");
+
+            return self::LINK_FAILED;
         }
+
+        Log::info("WebsliceProvider: Created symlink from [$link] to [$target]");
+
+        return self::LINK_OK;
     }
 }

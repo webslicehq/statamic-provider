@@ -50,9 +50,16 @@ These paths use shared storage that persists between deployments:
 
 Statamic 4 reads the form submissions path from `statamic.forms.submissions`, while Statamic 5 and 6 resolve it from the `form-submissions` Stache store. Both keys are set to the same path so submissions land in shared storage on every supported version.
 
-## Glide Image Cache
+## Symlinked directories
 
-The provider symlinks the glide-cache route to the shared directory path so your assets can be served from the shared directory.
+Some directories have to stay inside `public/` to be served by the web server, so the provider symlinks them into shared storage rather than moving them:
+
+| Directory | Linked to | So that |
+| --- | --- | --- |
+| the Glide route from `statamic.assets.image_manipulation.route` | `/mnt/data/website/shared/public/glide-cache` | generated images survive deploys |
+| the `assets` disk, when rooted in `public/` | `/mnt/data/website/shared/public/<directory>` | Control Panel uploads and their `.meta` sidecars survive deploys |
+
+A link is only created when the path is free. Where a real directory is already there the provider leaves it alone, so a site that commits its assets to the repository needs a build step to seed shared storage and create the link before the application boots. [`webslicehq/statamic-starter`](https://github.com/webslicehq/statamic-starter) does this in `.webslice/build.sh`.
 
 ## Manual Registration
 
